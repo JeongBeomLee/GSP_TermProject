@@ -46,13 +46,11 @@ sf::RenderWindow* g_window;
 sf::Font g_font;
 enum Direction { UP, DOWN, LEFT, RIGHT, COUNT };
 
-bool is_pc(int object_id)
-{
+bool is_pc(int object_id) {
 	return object_id < MAX_USER;
 }
 
-bool is_npc(int object_id)
-{
+bool is_npc(int object_id) {
 	return !is_pc(object_id);
 }
 
@@ -307,8 +305,7 @@ void ProcessPacket(char* ptr)
 	}
 	break;
 
-	case SC_ADD_OBJECT:
-	{
+	case SC_ADD_OBJECT: {
 		SC_ADD_OBJECT_PACKET* my_packet = reinterpret_cast<SC_ADD_OBJECT_PACKET*>(ptr);
 		int id = my_packet->id;
 
@@ -363,8 +360,7 @@ void ProcessPacket(char* ptr)
 		}
 		break;
 	}
-	case SC_MOVE_OBJECT:
-	{
+	case SC_MOVE_OBJECT: {
 		SC_MOVE_OBJECT_PACKET* my_packet = reinterpret_cast<SC_MOVE_OBJECT_PACKET*>(ptr);
 		int other_id = my_packet->id;
 		if (other_id == g_myid) {
@@ -379,9 +375,7 @@ void ProcessPacket(char* ptr)
 		}
 		break;
 	}
-
-	case SC_REMOVE_OBJECT:
-	{
+	case SC_REMOVE_OBJECT: {
 		SC_REMOVE_OBJECT_PACKET* my_packet = reinterpret_cast<SC_REMOVE_OBJECT_PACKET*>(ptr);
 		int other_id = my_packet->id;
 		if (other_id == g_myid) {
@@ -392,8 +386,7 @@ void ProcessPacket(char* ptr)
 		}
 		break;
 	}
-	case SC_CHAT:
-	{
+	case SC_CHAT: {
 		SC_CHAT_PACKET* my_packet = reinterpret_cast<SC_CHAT_PACKET*>(ptr);
 		string chat_str;
 		int other_id = my_packet->id;
@@ -461,27 +454,26 @@ void ProcessPacket(char* ptr)
 
 void process_data(char* net_buf, size_t io_byte)
 {
-	char* ptr = net_buf;
-	static size_t in_packet_size = 0;
-	static size_t saved_packet_size = 0;
-	static char packet_buffer[BUF_SIZE];
+	// 수신된 데이터를 누적할 동적 버퍼
+	static std::vector<char> buffer;
 
-	while (0 != io_byte) {
-		if (0 == in_packet_size) 
-			in_packet_size = static_cast<unsigned short>(*ptr);
-		if (io_byte + saved_packet_size >= in_packet_size) {
-			memcpy(packet_buffer + saved_packet_size, ptr, in_packet_size - saved_packet_size);
-			ProcessPacket(packet_buffer);
-			ptr += in_packet_size - saved_packet_size;
-			io_byte -= in_packet_size - saved_packet_size;
-			in_packet_size = 0;
-			saved_packet_size = 0;
-		}
-		else {
-			memcpy(packet_buffer + saved_packet_size, ptr, io_byte);
-			saved_packet_size += io_byte;
-			io_byte = 0;
-		}
+	// 새 데이터를 버퍼에 추가
+	buffer.insert(buffer.end(), net_buf, net_buf + io_byte);
+
+	// 충분한 데이터가 남아 있다면 패킷 단위로 처리
+	while (!buffer.empty()) {
+		// 패킷의 크기(첫 바이트)를 가져옴.
+		unsigned short packet_size = static_cast<unsigned char>(buffer[0]);
+
+		// 아직 완전한 패킷이 수신되지 않은 경우 대기
+		if (buffer.size() < packet_size)
+			break;
+
+		// 완전한 패킷이 있으므로 ProcessPacket() 호출
+		ProcessPacket(buffer.data());
+
+		// 처리한 패킷만큼 버퍼에서 제거
+		buffer.erase(buffer.begin(), buffer.begin() + packet_size);
 	}
 }
 
@@ -701,50 +693,7 @@ int main()
 					}
 				}
 				else if (false == chat_mode) {
-
-					if (duration >= 1) {
-						int direction = -1;
-						switch (event.key.code) {
-						case sf::Keyboard::Left:
-							direction = 2;
-							myPlayer.m_direction = LEFT;
-							break;
-						case sf::Keyboard::Right:
-							direction = 3;
-							myPlayer.m_direction = RIGHT;
-							break;
-						case sf::Keyboard::Up:
-							direction = 0;
-							myPlayer.m_direction = UP;
-							break;
-						case sf::Keyboard::Down:
-							direction = 1;
-							myPlayer.m_direction = DOWN;
-							break;
-						case sf::Keyboard::Escape:
-							window.close();
-							break;
-						case sf::Keyboard::A:
-							if (attack_duration >= 1) {
-								CS_ATTACK_PACKET p;
-								p.size = sizeof(p);
-								p.type = CS_ATTACK;
-								send_packet(&p);
-								myPlayer.attack();
-								last_attack_time = now;
-							}
-							break;
-						}
-						if (-1 != direction) {
-							CS_MOVE_PACKET p;
-							p.size = sizeof(p);
-							p.type = CS_MOVE;
-							p.direction = direction;
-							send_packet(&p);
-							last_move_time = now;
-						}
-					}
-					/*int direction = -1;
+					int direction = -1;
 					switch (event.key.code) {
 					case sf::Keyboard::Left:
 						direction = 2;
@@ -776,7 +725,6 @@ int main()
 						}
 						break;
 					}
-
 					if (-1 != direction) {
 						CS_MOVE_PACKET p;
 						p.size = sizeof(p);
@@ -785,8 +733,6 @@ int main()
 						send_packet(&p);
 						last_move_time = now;
 					}
-				}
-			}*/
 				}
 			}
 

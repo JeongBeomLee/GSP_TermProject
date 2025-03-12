@@ -11,10 +11,10 @@
 #include <mutex>
 #include <fstream>
 #include <map>
+#include <chrono>
 #include "protocol.h"
 #include "include/lua.hpp"
 
-//#define DEBUG
 #pragma comment(lib, "WS2_32.lib")
 #pragma comment(lib, "MSWSock.lib")
 #pragma comment(lib, "lua54.lib")
@@ -259,12 +259,13 @@ bool can_see(int from, int to) {
     return dist <= VIEW_RANGE * VIEW_RANGE;
 }
 
+// 두 좌표가 인접(상하좌우)한지 판단
+bool is_adjacent(int x1, int y1, int x2, int y2) {
+    return (abs(x1 - x2) + abs(y1 - y2)) == 1;
+}
+
 bool is_attacked_from_player(int c_id, int npc_id) {
-    if (clients[npc_id].x == clients[c_id].x && clients[npc_id].y == clients[c_id].y - 1)        return true;
-    else if (clients[npc_id].x == clients[c_id].x && clients[npc_id].y == clients[c_id].y + 1)    return true;
-    else if (clients[npc_id].x == clients[c_id].x - 1 && clients[npc_id].y == clients[c_id].y)    return true;
-    else if (clients[npc_id].x == clients[c_id].x + 1 && clients[npc_id].y == clients[c_id].y)    return true;
-    return false;
+    return is_adjacent(clients[c_id].x, clients[c_id].y, clients[npc_id].x, clients[npc_id].y);
 }
 
 void SESSION::send_move_packet(int c_id) {
@@ -414,8 +415,20 @@ void process_packet(int c_id, char* packet) {
         }
 
         if (!is_obstacle(new_x, new_y)) {
-            clients[c_id].x = new_x;
-            clients[c_id].y = new_y;
+            bool collision = false;
+            // 전체 객체(플레이어 및 NPC)를 대상으로 겹침 여부 검사
+            for (int i = 0; i < MAX_USER + MAX_NPC; ++i) {
+                if (i == c_id) continue;
+                if (clients[i]._state != ST_INGAME) continue;
+                if (clients[i].x == new_x && clients[i].y == new_y) {
+                    collision = true;
+                    break;
+                }
+            }
+            if (!collision) {
+                clients[c_id].x = new_x;
+                clients[c_id].y = new_y;
+            }
         }
 #ifdef DEBUG
         cout << "Client[" << c_id << "] moved to (" << x << ", " << y << ")\n";
@@ -526,7 +539,7 @@ void process_packet(int c_id, char* packet) {
 								clients[c_id].level++;
                                 clients[c_id].max_exp = clients[c_id].max_exp * 2;
                                 clients[c_id].exp = 0;
-								clients[c_id].max_hp = 10 * pow(clients[c_id].level, 2);
+								clients[c_id].max_hp = 100 * clients[c_id].level;
 								clients[c_id].hp = clients[c_id].max_hp;
 								clients[c_id].attack_damage = 10 * pow(clients[c_id].level, 2);
                             }
@@ -620,9 +633,21 @@ void do_npc_random_move(int npc_id) {
     case 3:if (y > 0) new_y--; break;
     }
 
+    // 이동하려는 좌표에 장애물이 없고, 다른 플레이어 및 NPC와 겹치지 않을 경우에만 이동
     if (!is_obstacle(new_x, new_y)) {
-        npc.x = new_x;
-        npc.y = new_y;
+        bool collision = false;
+        for (int i = 0; i < MAX_USER + MAX_NPC; ++i) {
+            if (i == npc_id) continue;
+            if (clients[i]._state != ST_INGAME) continue;
+            if (clients[i].x == new_x && clients[i].y == new_y) {
+                collision = true;
+                break;
+            }
+        }
+        if (!collision) {
+            npc.x = new_x;
+            npc.y = new_y;
+        }
     }
 
     int old_sector_x = npc._sector_x;
@@ -840,8 +865,27 @@ void worker_thread(HANDLE h_iocp) {
             vector<POINT> path = AStarPathfinding(clients[key].x, clients[key].y, clients[target_id].x, clients[target_id].y);
             if (!path.empty()) {
                 POINT next_step = path.front();
-                clients[key].x = next_step.x;
-                clients[key].y = next_step.y;
+
+                // 이동하려는 좌표의 충돌 여부 확인 (NPC 및 플레이어 모두 검사)
+                bool collision = false;
+                for (int i = 0; i < MAX_USER + MAX_NPC; ++i) {
+                    if (i == key) continue;
+                    if (clients[i]._state != ST_INGAME) continue;
+                    if (clients[i].x == next_step.x && clients[i].y == next_step.y) {
+                        collision = true;
+                        break;
+                    }
+                }
+                if (!collision) {
+                    clients[key].x = next_step.x;
+                    clients[key].y = next_step.y;
+                }
+                else {
+                    // 움직일 수 없으면 추적 중단
+                    clients[key]._is_active = false;
+                    delete ex_over;
+                    break;
+                }
 
                 if (is_attacked_from_player(target_id, key)) {
                     clients[target_id].hp -= clients[key].attack_damage;

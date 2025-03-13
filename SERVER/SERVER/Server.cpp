@@ -793,7 +793,6 @@ void worker_thread(HANDLE h_iocp) {
             sess._recv_buffer.insert(sess._recv_buffer.end(), ex_over->_send_buf, ex_over->_send_buf + num_bytes);
 
             while (!sess._recv_buffer.empty()) {
-                // 패킷의 크기를 첫 바이트에서 가져옴 (단, unsigned char로 변환)
                 unsigned short packet_size = static_cast<unsigned char>(sess._recv_buffer[0]);
                 if (sess._recv_buffer.size() < packet_size)
                     break;

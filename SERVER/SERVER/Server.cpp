@@ -142,7 +142,6 @@ public:
     short x, y;
 	short start_x, start_y;
     char _name[NAME_SIZE];
-    int _prev_remain;
     unordered_set<int> _view_list;
     mutex _vl;
     int last_move_time;
@@ -156,6 +155,7 @@ public:
     int level;
     int attack_damage;
     int npc_respawn_time;
+    vector<char> _recv_buffer; // 수신된 데이터를 누적할 동적 버퍼
 
     SESSION() {
         _id = -1;
@@ -163,7 +163,6 @@ public:
         x = y = 0;
         _name[0] = 0;
         _state = ST_FREE;
-        _prev_remain = 0;
         _ai_dir = -1;
     }
 
@@ -172,8 +171,8 @@ public:
     void do_recv() {
         DWORD recv_flag = 0;
         memset(&_recv_over._over, 0, sizeof(_recv_over._over));
-        _recv_over._wsabuf.len = BUF_SIZE - _prev_remain;
-        _recv_over._wsabuf.buf = _recv_over._send_buf + _prev_remain;
+        _recv_over._wsabuf.len = BUF_SIZE;
+        _recv_over._wsabuf.buf = _recv_over._send_buf;
         WSARecv(_socket, &_recv_over._wsabuf, 1, 0, &recv_flag, &_recv_over._over, 0);
     }
 
@@ -774,7 +773,6 @@ void worker_thread(HANDLE h_iocp) {
                 clients[client_id].y = 0;
                 clients[client_id]._id = client_id;
                 clients[client_id]._name[0] = 0;
-                clients[client_id]._prev_remain = 0;
                 clients[client_id]._socket = g_c_socket;
                 sprintf_s(clients[client_id]._name, "PLAYER%d", client_id);
                 CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_c_socket), h_iocp, client_id, 0);
@@ -791,22 +789,18 @@ void worker_thread(HANDLE h_iocp) {
 		    break;
 
         case OP_RECV: {
-            int remain_data = num_bytes + clients[key]._prev_remain;
-            char* p = ex_over->_send_buf;
-            while (remain_data > 0) {
-                int packet_size = static_cast<unsigned short>(p[0]);
-                if (packet_size <= remain_data) {
-                    process_packet(static_cast<int>(key), p);
-                    p = p + packet_size;
-                    remain_data = remain_data - packet_size;
-                }
-                else break;
+            SESSION& sess = clients[key];
+            sess._recv_buffer.insert(sess._recv_buffer.end(), ex_over->_send_buf, ex_over->_send_buf + num_bytes);
+
+            while (!sess._recv_buffer.empty()) {
+                // 패킷의 크기를 첫 바이트에서 가져옴 (단, unsigned char로 변환)
+                unsigned short packet_size = static_cast<unsigned char>(sess._recv_buffer[0]);
+                if (sess._recv_buffer.size() < packet_size)
+                    break;
+                process_packet(static_cast<int>(key), sess._recv_buffer.data());
+                sess._recv_buffer.erase(sess._recv_buffer.begin(), sess._recv_buffer.begin() + packet_size);
             }
-            clients[key]._prev_remain = remain_data;
-            if (remain_data > 0) {
-                memcpy(ex_over->_send_buf, p, remain_data);
-            }
-            clients[key].do_recv();
+            sess.do_recv();
         }
             break;
 
